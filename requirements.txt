@@ -1,0 +1,5 @@
+numpy
+gymnasium
+# Add other dependencies here as needed, e.g.:
+# matplotlib
+# scipy 
