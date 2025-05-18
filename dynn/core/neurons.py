@@ -163,20 +163,46 @@ class NeuronPopulation:
 
 
     def _get_initial_value(self, dist_config, default_val):
+        """
+        根据提供的分布配置为单个神经元生成初始值。
+        dist_config 可以是 None, 一个标量值, 或者一个包含分布类型和参数的对象/字典。
+        """
         if dist_config is None:
-            return default_val
+            return float(default_val) if default_val is not None else -70.0 # 确保返回float, 提供一个最终默认值
+        
         if isinstance(dist_config, (int, float)):
             return float(dist_config)
-        elif isinstance(dist_config, tuple) and len(dist_config) == 2:
-            dist_type, params = dist_config
-            if dist_type == 'uniform':
-                return np.random.uniform(params[0], params[1])
+        
+        # 假设 dist_config 是一个对象 (例如 SimpleNamespace) 或字典，包含 .dist 属性
+        # (来自实验脚本的 _get_initial_condition_config_obj 返回这样的对象)
+        if hasattr(dist_config, 'dist'):
+            dist_type = dist_config.dist
+            if dist_type == 'scalar':
+                if not hasattr(dist_config, 'value'):
+                    raise ValueError("标量分布类型缺少 'value' 属性。")
+                return float(dist_config.value)
+            elif dist_type == 'uniform':
+                if not hasattr(dist_config, 'low') or not hasattr(dist_config, 'high'):
+                    raise ValueError("均匀分布类型缺少 'low' 或 'high' 属性。")
+                return np.random.uniform(float(dist_config.low), float(dist_config.high))
             elif dist_type == 'normal':
-                return np.random.normal(params[0], params[1])
+                if not hasattr(dist_config, 'mean') or not hasattr(dist_config, 'std'):
+                    raise ValueError("正态分布类型缺少 'mean' 或 'std' 属性。")
+                return np.random.normal(float(dist_config.mean), float(dist_config.std))
             else:
-                raise ValueError(f"不支持的分布类型: {dist_type}")
+                raise ValueError(f"不支持的分布类型: {dist_type} (在 dist_config 对象中)")
+        # 移除旧的元组格式检查，因为它不再被实验脚本生成
+        # elif isinstance(dist_config, tuple) and len(dist_config) == 2:
+        #     dist_type, params = dist_config
+        #     if dist_type == 'uniform':
+        #         return np.random.uniform(params[0], params[1])
+        #     elif dist_type == 'normal':
+        #         return np.random.normal(params[0], params[1])
+        #     else:
+        #         raise ValueError(f"不支持的分布类型: {dist_type}")
         else:
-            raise ValueError(f"无效的初始值配置: {dist_config}")
+            # 如果 dist_config 不是 None, 数字, 或带有 .dist 属性的对象，则它是无效的
+            raise ValueError(f"无效的初始值配置格式: {dist_config} (类型: {type(dist_config)})")
 
     def get_default_neuron_param(self, param_name):
         """辅助方法，获取神经元模型的默认参数值。"""

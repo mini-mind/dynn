@@ -41,7 +41,7 @@ class BaseLearningRule:
     def get_effective_lr_ltd(self):
         return self.lr_ltd * self.reward_modulation
 
-class TraceSTDP(BaseLearningRule):
+class STDP(BaseLearningRule):
     """
     基于脉冲迹的STDP (尖峰时间依赖可塑性) 规则。
     具体实现权重依赖的乘性STDP。
@@ -49,7 +49,10 @@ class TraceSTDP(BaseLearningRule):
     def __init__(self, lr_ltp=0.005, lr_ltd=0.005, 
                  tau_pre=20, tau_post=20, 
                  w_max=1.0, w_min=0.0, 
-                 trace_increase=1.0):
+                 trace_increase=1.0,
+                 # Parameters from experiment script for RewardModulatedSTDP that might be handled here or in a subclass
+                 synapse_collection=None, # Added to match RewardModulatedSTDP, though not used in original TraceSTDP init
+                 dt=None): # Added to match RewardModulatedSTDP, though not used in original TraceSTDP init
         """
         初始化基于脉冲迹的STDP学习规则。
 
@@ -61,6 +64,8 @@ class TraceSTDP(BaseLearningRule):
             w_max (float): 权重的最大值。
             w_min (float): 权重的最小值。
             trace_increase (float): 脉冲发生时，迹变量增加的固定值。
+            synapse_collection: 关联的突触集合 (主要由子类或调用代码管理)。
+            dt (float): 时间步长 (主要由子类或调用代码管理更新)。
         """
         super().__init__(lr_ltp, lr_ltd)
         self.tau_pre = tau_pre
@@ -68,11 +73,11 @@ class TraceSTDP(BaseLearningRule):
         self.w_max = w_max
         self.w_min = w_min
         self.trace_increase = trace_increase
-        
-        # 脉冲迹的衰减因子，假设dt=1ms。如果dt不同，需要在update中调整或传入dt
-        # self.decay_pre = np.exp(-1.0/self.tau_pre) # dt=1ms
-        # self.decay_post = np.exp(-1.0/self.tau_post) # dt=1ms
-        # 在 update_traces 中处理衰减，以便适应可变的 dt
+        # synapse_collection and dt are not typically part of the core STDP parameter set here,
+        # as they are context for 'update_weights'. However, if RewardModulatedSTDP passes them,
+        # we can acknowledge them.
+        self.synapse_collection = synapse_collection # Store if passed
+        self._dt_cached = dt # Store if passed, for potential use if update_weights doesn't receive it.
 
     def update_traces(self, population, spikes, trace_type, dt):
         """
@@ -206,4 +211,78 @@ class TraceSTDP(BaseLearningRule):
         synapse_collection.weights *= connection_mask
 
     def __repr__(self):
-        return f"TraceSTDP(lr_ltp={self.lr_ltp}, lr_ltd={self.lr_ltd}, tau_pre={self.tau_pre}, tau_post={self.tau_post})" 
+        return f"STDP(lr_ltp={self.lr_ltp}, lr_ltd={self.lr_ltd}, tau_pre={self.tau_pre}, tau_post={self.tau_post})"
+
+class RewardModulatedSTDP(STDP):
+    """
+    奖励调制的STDP规则。
+    继承自STDP，并明确处理与奖励调制相关的特定参数。
+    核心的奖励调制机制 (LTP/LTD的缩放) 来自 BaseLearningRule。
+    """
+    def __init__(self, synapse_collection, dt,
+                 tau_plus, tau_minus, a_plus, a_minus,
+                 dependency_type="unknown", # default if not specified
+                 reward_tau=50.0, # default if not specified
+                 learning_rate_modulation_strength=1.0, # default if not specified
+                 w_max=1.0, w_min=0.0, trace_increase=1.0): # Added STDP defaults if not overridden
+        """
+        初始化奖励调制的STDP学习规则。
+
+        参数:
+            synapse_collection (SynapseCollection): 关联的突触集合。
+            dt (float): 仿真时间步长。
+            tau_plus (float): STDP LTP时间常数 (对应 STDP.tau_pre)。
+            tau_minus (float): STDP LTD时间常数 (对应 STDP.tau_post)。
+            a_plus (float): STDP LTP幅度 (对应 STDP.lr_ltp)。
+            a_minus (float): STDP LTD幅度 (对应 STDP.lr_ltd)。
+            dependency_type (str): STDP依赖类型 (例如 'nearest', 'all_to_all') - informational for now。
+            reward_tau (float): 奖励信号平滑的时间常数 (如果适用，目前不由基类使用)。
+            learning_rate_modulation_strength (float): 奖励对学习率调制的强度 (如果适用，目前不由基类使用)。
+            w_max (float): 权重的最大值。
+            w_min (float): 权重的最小值。
+            trace_increase (float): 脉冲发生时，迹变量增加的固定值。
+        """
+        # 将实验脚本参数映射到 STDP (原 TraceSTDP) 的参数
+        super().__init__(
+            lr_ltp=a_plus, 
+            lr_ltd=a_minus,
+            tau_pre=tau_plus, 
+            tau_post=tau_minus,
+            w_max=w_max,
+            w_min=w_min,
+            trace_increase=trace_increase,
+            synapse_collection=synapse_collection, # Pass to parent
+            dt=dt # Pass to parent
+        )
+        # 存储特定于 RewardModulatedSTDP 或实验配置的参数
+        self.dependency_type = dependency_type
+        self.reward_tau = reward_tau # May be used by a reward processor, not directly by this class's inherited logic
+        self.learning_rate_modulation_strength = learning_rate_modulation_strength # Informational or for future more complex modulation
+
+        # dt and synapse_collection are also passed to parent, but also crucial for this instance's operation context
+        # if its update_weights or other methods are called directly.
+        # However, the network usually passes them to update_weights.
+
+    def update_reward_signal(self, reward_signal):
+        """
+        更新奖励信号。
+        此方法利用 BaseLearningRule 中的 set_reward_modulation。
+        可以根据 learning_rate_modulation_strength 扩展此方法。
+        """
+        # 基础实现是: self.reward_modulation = reward_signal
+        # 如果 learning_rate_modulation_strength 需要以特定方式应用，可以在这里修改
+        # 例如: modulated_reward = reward_signal * self.learning_rate_modulation_strength
+        # 但要注意这可能与 BaseLearningRule 中 get_effective_lr 的乘法重复或冲突。
+        # 目前，我们假设 strength 是用于外部平滑或奖励处理，
+        # 或者用于调整 reward_signal 本身，然后才传递给这里。
+        # 为保持与BaseLearningRule的兼容性，并假设strength是配置平滑器或其他，
+        # 我们暂时直接使用继承的 set_reward_modulation。
+        super().set_reward_modulation(reward_signal)
+        # 如果需要更复杂的调制，可以取消注释并调整以下行：
+        # effective_reward_for_modulation = reward_signal * self.learning_rate_modulation_strength
+        # super().set_reward_modulation(effective_reward_for_modulation)
+
+    def __repr__(self):
+        return (f"RewardModulatedSTDP(lr_ltp={self.lr_ltp}, lr_ltd={self.lr_ltd}, "
+                f"tau_pre={self.tau_pre}, tau_post={self.tau_post}, "
+                f"reward_tau={self.reward_tau}, strength={self.learning_rate_modulation_strength})") 

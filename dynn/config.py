@@ -2,6 +2,7 @@
 
 import yaml # PyYAML 需要安装: pip install PyYAML
 import copy # 修正：正确的导入
+from types import SimpleNamespace # 新增导入
 
 class ConfigManager:
     """
@@ -137,12 +138,18 @@ class ConfigManager:
         # 为了简洁，不打印整个配置字典
         return f"ConfigManager(config_keys_L1={list(self._config.keys())})"
 
-    def __str__(self):
-        # 以更可读的格式打印配置 (例如，YAML 格式)
-        try:
-            return yaml.dump(self._config, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        except Exception:
-            return repr(self)
+    def to_namespace(self):
+        """将配置字典转换为一个嵌套的 SimpleNamespace 对象，以便通过属性访问。"""
+        return self._dict_to_namespace(self._config)
+
+    def _dict_to_namespace(self, d):
+        if isinstance(d, dict):
+            # 首先递归转换所有子字典
+            converted_dict = {k: self._dict_to_namespace(v) for k, v in d.items()}
+            return SimpleNamespace(**converted_dict)
+        elif isinstance(d, list):
+            return [self._dict_to_namespace(item) for item in d]
+        return d
 
 # 示例默认配置 (可以非常详细)
 def get_default_dynn_config():
@@ -150,121 +157,217 @@ def get_default_dynn_config():
     config = {
         'simulation': {
             'dt': 1.0,  # ms, 时间步长
-            'total_duration': 1000.0, # ms, 总仿真时长 (示例)
-            'random_seed': None # None 表示不设置特定种子，或使用整数值
-        },
-        'snn_core': {
-            'populations': [], # 列表，每个元素是一个群体配置字典
-            'synapses': [],    # 列表，每个元素是一个突触连接配置字典
+            'snn_run_duration_ms_per_env_step': 20.0, # ms, 每个环境步骤SNN运行的时长
+            'num_episodes': 5, # 减少轮次数以便快速测试
+            'max_steps_per_episode': 200, # MountainCar-v0 默认是200
+            'random_seed': None
         },
         'environment': {
-            'name': 'MountainCar-v0', # 示例 Gym 环境
+            'name': 'MountainCar-v0',
             'params': {},
         },
-        'learning': {
-            'reward_processor': {
-                'type': 'SlidingWindowSmoother', # 或 None
-                'params': {
-                    'window_size': 100
+        'snn': { # 将SNN核心相关的配置移到这里，与实验脚本的 config.snn.xxx 对应
+            'input_neurons_count': 64, # 示例值
+            'output_neurons_count': 3, # 对应 MountainCar 的3个动作
+            'populations': [
+                {
+                    'name': 'InputPopulation',
+                    'model_type': 'IzhikevichNeuron', # 新增：指定神经元模型类名
+                    'params': {'a': 0.02, 'b': 0.2, 'c': -65.0, 'd': 8.0}, # RS神经元参数
+                    'initial_conditions': { # 新增：结构化初始条件
+                        'v': {'dist': 'uniform', 'low': -70.0, 'high': -50.0},
+                        'u': {'dist': 'scalar', 'value': -14.0} # d*v_reset_approx
+                    }
+                },
+                {
+                    'name': 'OutputPopulation',
+                    'model_type': 'IzhikevichNeuron',
+                    'params': {'a': 0.02, 'b': 0.2, 'c': -65.0, 'd': 8.0},
+                    'initial_conditions': {
+                        'v': {'dist': 'uniform', 'low': -70.0, 'high': -50.0},
+                        'u': {'dist': 'scalar', 'value': -14.0}
+                    }
                 }
+            ],
+            'synapses': [
+                {
+                    'name': 'InputToOutputConnections',
+                    'pre_population_name': 'InputPopulation',
+                    'post_population_name': 'OutputPopulation',
+                    'connectivity_type': 'full', # 'full', 'sparse_prob', etc.
+                    # 'connectivity_params': {'prob': 0.1}, # 如果是稀疏连接
+                    'initial_weights': {
+                        'strategy': 'normal', # 'normal', 'uniform', scalar
+                        'mean': 0.5, # for normal
+                        'std': 0.1,   # for normal
+                        # 'low': 0.0, 'high': 1.0, # for uniform
+                        'value': 1.0 # for scalar
+                    },
+                    'weight_limits': {'min': 0.0, 'max': 10.0} # 示例权重限制
+                }
+            ]
+        },
+        'input_encoder': {
+            'type': 'GaussianEncoder', # 'GaussianEncoder' or 'CurrentInjector'
+            'gaussian_sigma_scale': 0.1, # 重命名自 gaussian_sigma，现在代表 sigma_scale
+            'gaussian_amplitude': 10.0, # 注入电流的幅度
+            'current_injector_gain': 1.0
+        },
+        'output_decoder': {
+            'type': 'WinnerTakesAllDecoder',
+            # SpikeRateDecoder 参数 (如果使用)
+            # 'spike_rate_window_ms': 50.0
+        },
+        'learning_rules': {
+            'stdp': { # STDP 基础参数
+                'tau_plus': 20.0,  # ms
+                'tau_minus': 20.0, # ms
+                'a_plus': 0.01,   # 学习率 (LTP)
+                'a_minus': 0.01,  # 学习率 (LTD)
+                'dependency_type': 'multiplicative' # 'additive' or 'multiplicative'
             },
-            'global_reward_modulation': True # 是否所有学习规则都受同一个处理后的奖励信号调制
+            'reward_modulation': { # 奖励调制参数
+                'reward_tau': 50.0, # ms, 奖励信号平滑的时间常数 (用于RewardModulatedSTDP内部平滑)
+                                     # 注意: 这与外部 SlidingWindowSmoother 的 window_size 不同
+                'strength': 0.1 # 奖励对学习率的调制强度
+            }
+        },
+        'reward_processor': {
+            'type': 'SlidingWindowSmoother',
+            'smoothing_window_size': 50 # 多少个环境步骤的奖励进行平滑
+        },
+        'probes': {
+            'record_interval_ms': 100.0, # ms
+            'output_dir': 'results/mountain_car_v0/',
+            'save_to_csv': True
         },
         'experiment': {
-            'name': 'default_experiment',
+            'name': 'mountain_car_v0_default',
             'log_level': 'INFO',
-            'results_dir': 'results/'
         }
     }
     return config
 
-# 可以在这里预定义一些特定模型/实验的配置模板函数
-# 例如: def get_mountain_car_config(): ...
+# 全局默认配置实例 (ConfigManager)
+# default_config_manager = ConfigManager(get_default_dynn_config()) # 不在这里实例化，而是在load_config中
+
+def load_config(default_config_dict=None, yaml_config_path=None):
+    """
+    加载配置。首先加载默认配置字典，然后（如果提供）从YAML文件加载并覆盖。
+    返回一个可以通过属性访问的配置对象 (SimpleNamespace)。
+
+    参数:
+        default_config_dict (dict, optional): 包含默认配置的字典。
+                                            如果为None，则使用 get_default_dynn_config()。
+        yaml_config_path (str, optional): YAML配置文件的路径。
+
+    返回:
+        SimpleNamespace: 一个嵌套的 SimpleNamespace 对象，包含最终的配置。
+    """
+    if default_config_dict is None:
+        default_config_dict = get_default_dynn_config()
+
+    manager = ConfigManager(default_config_dict)
+
+    if yaml_config_path:
+        print(f"尝试从 YAML 文件加载配置: {yaml_config_path}")
+        manager.load_from_yaml(yaml_config_path)
+    else:
+        print("未提供 YAML 配置文件路径，使用默认配置。")
+
+    return manager.to_namespace()
 
 
 if __name__ == '__main__':
     # 示例用法
-    default_cfg = get_default_dynn_config()
-    config_manager = ConfigManager(default_cfg)
+    # 1. 加载默认配置
+    cfg = load_config()
+    print("--- 默认配置 (通过属性访问) ---")
+    print(f"模拟步长 (dt): {cfg.simulation.dt} ms")
+    print(f"输入神经元数量: {cfg.snn.input_neurons_count}")
+    print(f"第一个突触连接的学习规则 (如果存在): {cfg.snn.synapses[0].learning_rule if hasattr(cfg.snn.synapses[0], 'learning_rule') else 'N/A'}")
+    print(f"STDP a_plus: {cfg.learning_rules.stdp.a_plus}")
 
-    print("--- 初始配置 ---")
-    print(config_manager)
+    # 2. 模拟从文件加载配置 (创建一个临时的YAML文件来测试)
+    temp_yaml_content = """
+simulation:
+  dt: 0.5 # 覆盖默认的 dt
+  num_episodes: 5
 
-    # 获取配置
-    print(f"\n获取 dt: {config_manager.get('simulation.dt')}")
-    print(f"获取不存在的路径 (带默认值): {config_manager.get('snn.nonexistent.param', default=42)}")
+snn:
+  input_neurons_count: 32 # 覆盖
 
-    # 设置配置
-    config_manager.set('snn_core.populations', [
-        {
-            'name': 'input_pop', 'num_neurons': 10, 'model': 'IzhikevichNeuron',
-            'params': {'a': 0.02, 'b': 0.2, 'c': -65, 'd': 2},
-            'initial_v': ('normal', -70, 5), # (distribution_type, mean, std) or scalar
-            'initial_u': ('uniform', -14, -10) # (distribution_type, low, high) or scalar
-        },
-        {
-            'name': 'output_pop', 'num_neurons': 3, 'model': 'IzhikevichNeuron',
-            'params': {'a': 0.1, 'b': 0.25, 'c': -60, 'd': 2}
-        }
-    ])
-    config_manager.set('snn_core.synapses', [
-        {
-            'name': 'input_to_output',
-            'pre_pop_name': 'input_pop',
-            'post_pop_name': 'output_pop',
-            'connectivity': {
-                'type': 'sparse_prob', # 'full', 'sparse_prob', 'sparse_num', 'neighborhood'
-                'prob': 0.5 # 连接概率
-            },
-            'weight_init': {
-                'dist': ('normal', 0.5, 0.1), # (type, mean, std) or scalar
-                'w_min': 0.0,
-                'w_max': 1.0
-            },
-            'is_excitatory': True,
-            'learning_rule': {
-                'type': 'TraceSTDP',
-                'params': {
-                    'lr_ltp': 0.005, 'lr_ltd': 0.005,
-                    'tau_pre': 20.0, 'tau_post': 20.0,
-                    # w_min, w_max 从 weight_init 获取或在此处覆盖
-                }
-            }
-        }
-    ])
+experiment:
+  name: 'my_custom_experiment'
+"""
+    temp_yaml_path = 'temp_test_config.yaml'
+    with open(temp_yaml_path, 'w', encoding='utf-8') as f:
+        f.write(temp_yaml_content)
 
-    print("\n--- 修改后的配置 (部分) ---")
-    print(f"输入群体配置: {config_manager.get('snn_core.populations.0')}")
-    print(f"第一个突触的学习规则类型: {config_manager.get('snn_core.synapses.0.learning_rule.type')}")
+    cfg_from_file = load_config(yaml_config_path=temp_yaml_path)
+    print("\n--- 从 YAML 加载并覆盖后的配置 ---")
+    print(f"模拟步长 (dt): {cfg_from_file.simulation.dt} ms")
+    print(f"输入神经元数量: {cfg_from_file.snn.input_neurons_count}")
+    print(f"实验名称: {cfg_from_file.experiment.name}")
+    print(f"STDP a_plus (未被覆盖，应为默认值): {cfg_from_file.learning_rules.stdp.a_plus}")
 
-    # 从字典更新
-    updates = {
-        'simulation': {'dt': 0.5, 'random_seed': 12345},
-        'experiment': {'name': 'mountain_car_test'}
-    }
-    config_manager.update_from_dict(updates)
-    print("\n--- 从字典更新后的配置 ---")
-    print(f"dt: {config_manager.get('simulation.dt')}, seed: {config_manager.get('simulation.random_seed')}")
-    print(f"实验名称: {config_manager.get('experiment.name')}")
+    # 清理临时文件
+    import os
+    try:
+        os.remove(temp_yaml_path)
+    except OSError:
+        pass
 
-    # 保存到 YAML
-    config_manager.save_to_yaml('./dynn_config_example.yaml')
-    print("\n配置已保存到 dynn_config_example.yaml")
+    # 示例：直接使用 ConfigManager 来获取特定值 (如果不想用 SimpleNamespace)
+    manager = ConfigManager(get_default_dynn_config())
+    if os.path.exists(temp_yaml_path):
+        manager.load_from_yaml(temp_yaml_path)
+    else:
+        print(f"信息: 临时配置文件 {temp_yaml_path} 已被删除或不存在，跳过加载到 manager。")
 
-    # 从 YAML 加载 (创建新实例或覆盖现有实例)
-    new_config_manager = ConfigManager()
-    new_config_manager.load_from_yaml('./dynn_config_example.yaml')
-    print("\n--- 从 YAML 文件加载的配置 ---")
-    # print(new_config_manager)
-    assert new_config_manager.get('simulation.dt') == 0.5
-    assert new_config_manager.get('snn_core.populations.0.name') == 'input_pop'
-    print("YAML 加载和断言成功。")
+    print("\n--- 使用 ConfigManager.get --- ")
+    print(f"模拟步长 (dt): {manager.get('simulation.dt')}")
 
-    # 测试不存在的路径返回None
-    assert new_config_manager.get('does.not.exist') is None
-    print("测试不存在路径返回 None 成功。")
+    # 展示保存配置
+    # default_config_for_saving = ConfigManager(get_default_dynn_config())
+    # default_config_for_saving.save_to_yaml("default_dynn_config_output.yaml")
+    # print("\n默认配置已保存到 default_dynn_config_output.yaml")
 
-    # 测试设置深层路径
-    config_manager.set("a.b.c.d.e", 100)
-    assert config_manager.get("a.b.c.d.e") == 100
+    # 测试不存在的路径返回None (对于SimpleNamespace，我们会期望AttributeError)
+    try:
+        _ = cfg_from_file.this_attribute_should_not_exist
+        # 如果上面没有抛出 AttributeError，说明它意外地存在了
+        # 或者 SimpleNamespace 的行为与预期不同 (例如，如果它返回 None 而不是抛出错误)
+        # 但标准的 SimpleNamespace 会在属性不存在时抛出 AttributeError
+        # 如果我们想测试 ConfigManager.get() 的行为，那应该用 manager 对象
+        assert manager.get('this.deep.path.does.not.exist') is None, \
+               "ConfigManager.get() 未对不存在的深层路径返回 None"
+        print("测试 ConfigManager.get() 对不存在路径返回 None 成功。")
+
+        # 对于SimpleNamespace，我们可以检查一个顶层属性是否不存在
+        # (注意：SimpleNamespace(**{}) 创建后，访问任何属性都会 AttributeError)
+        # 如果 'this_attribute_should_not_exist' 不在 cfg_from_file 的顶层，访问会报错
+        # 这个测试点有点微妙，取决于 `_dict_to_namespace` 如何处理空字典或不存在的键
+        # 假设 `load_config` 返回的 namespace 中，未定义的顶层属性不会存在
+        # 更好的测试是尝试访问并期望 AttributeError
+        raised_error = False
+        try:
+            _ = cfg_from_file.non_existent_top_level_attribute 
+        except AttributeError:
+            raised_error = True
+        assert raised_error, "访问 SimpleNamespace 上不存在的顶层属性时未引发 AttributeError"
+        print("测试 SimpleNamespace 对不存在的顶层属性引发 AttributeError 成功。")
+
+    except AttributeError:
+        # 这是访问SimpleNamespace上不存在属性时的预期行为
+        print("测试 SimpleNamespace 对不存在属性引发 AttributeError 成功 (通过捕获异常)。")
+        # 额外确认 ConfigManager.get() 的行为
+        assert manager.get('this.deep.path.does.not.exist') is None, \
+               "ConfigManager.get() 未对不存在的深层路径返回 None (在异常块中检查)"
+        print("测试 ConfigManager.get() 对不存在路径返回 None 成功 (在异常块中检查)。")
+
+    # 测试设置深层路径 (这部分是针对 ConfigManager 的)
+    temp_manager_for_set = ConfigManager({})
+    temp_manager_for_set.set("a.b.c.d.e", 100)
+    assert temp_manager_for_set.get("a.b.c.d.e") == 100
     print("测试设置深层路径成功。") 

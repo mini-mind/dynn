@@ -35,7 +35,9 @@ class Simulator:
         返回:
             dict: 网络输出的脉冲映射。
         """
-        outputs = self.network.step(dt=self.dt, time_elapsed=self.current_time, inputs=input_currents_map)
+        outputs = self.network.step(input_currents_map=input_currents_map, 
+                                   dt=self.dt, 
+                                   current_time=self.current_time)
         self.current_time += self.dt
         self.total_steps_run += 1
         return outputs
