@@ -158,7 +158,7 @@ def get_default_dynn_config():
         'simulation': {
             'dt': 1.0,  # ms, 时间步长
             'snn_run_duration_ms_per_env_step': 20.0, # ms, 每个环境步骤SNN运行的时长
-            'num_episodes': 5, # 减少轮次数以便快速测试
+            'num_episodes': 100, # 增加轮次数以进行更长时间的训练
             'max_steps_per_episode': 200, # MountainCar-v0 默认是200
             'random_seed': None
         },

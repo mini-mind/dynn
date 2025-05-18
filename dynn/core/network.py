@@ -16,7 +16,7 @@ class NeuralNetwork:
         self.input_population_names = [] # 指定作为输入的神经元群体名称列表
         self.output_population_names = []# 指定作为输出的神经元群体名称列表
         
-        self.probes = [] # 修改：存储BaseProbe实例列表
+        self.probes = {} # 修改回字典：存储BaseProbe实例, key: probe_name
 
     def add_population(self, population):
         """
@@ -79,16 +79,14 @@ class NeuralNetwork:
         """
         if not isinstance(probe_instance, BaseProbe):
             raise TypeError("probe_instance 必须是 BaseProbe 的一个实例。")
-        # 检查名称冲突 (可选，或者让用户确保探针名称唯一)
-        # for p in self.probes:
-        #     if p.name == probe_instance.name:
-        #         raise ValueError(f"名为 '{probe_instance.name}' 的探针已存在.")
-        self.probes.append(probe_instance)
+        if probe_instance.name in self.probes: # 检查名称冲突
+            raise ValueError(f"名为 '{probe_instance.name}' 的探针已存在.")
+        self.probes[probe_instance.name] = probe_instance # 修改为字典赋值
         # print(f"探针 '{probe_instance.name}' 已添加到网络 '{self.name}'.")
 
     def _record_probes(self, current_time):
         """在每个仿真步骤中尝试记录所有已注册探针的数据。"""
-        for probe in self.probes:
+        for probe in self.probes.values(): # 修改为遍历字典的值
             probe.attempt_record(self, current_time) # 传递网络自身和当前时间
 
     def get_probe_data(self, probe_name):
@@ -101,14 +99,13 @@ class NeuralNetwork:
         异常:
             KeyError: 如果找不到具有指定名称的探针。
         """
-        for probe in self.probes:
-            if probe.name == probe_name:
-                return probe.get_data()
+        if probe_name in self.probes:
+            return self.probes[probe_name].get_data()
         raise KeyError(f"名为 '{probe_name}' 的探针未在网络中找到。")
     
     def get_all_probes(self):
-        """返回所有已注册探针的列表。"""
-        return self.probes
+        """返回所有已注册探针的字典。""" # 修改文档字符串
+        return self.probes # 直接返回字典
     # --- End Probe Management ---
 
     def step(self, input_currents_map, dt, current_time):
@@ -248,8 +245,11 @@ class NeuralNetwork:
             if hasattr(syn_collection.learning_rule, 'reset'):
                 syn_collection.learning_rule.reset()
         
-        for probe in self.probes: # 修改：重置所有探针对象
+        # 重置探针数据
+        for probe in self.probes.values(): # 修改为遍历字典的值
             probe.reset()
+        
+        # print(f"网络 '{self.name}' 已重置.")
 
     def __repr__(self):
         return f"NeuralNetwork(name='{self.name}', populations={len(self.populations)}, synapses={len(self.synapses)}, probes={len(self.probes)})" 

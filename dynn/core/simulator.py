@@ -108,7 +108,7 @@ class Simulator:
         # 如果是从当前时间点继续，那么 num_steps 的计算是正确的。
         # 如果是重置并运行，则应先调用 reset()。
         
-        print(f"计划运行仿真 {num_steps} 步 (总时长: {total_duration}, dt: {self.dt})...")
+        # print(f"计划运行仿真 {num_steps} 步 (总时长: {total_duration}, dt: {self.dt})...")
         return self.run_n_steps(num_steps, input_generator_fn, callback_fn, stop_condition_fn)
 
     def reset(self, reset_time=True):

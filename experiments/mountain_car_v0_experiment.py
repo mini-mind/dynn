@@ -17,6 +17,10 @@ import argparse
 import matplotlib.pyplot as plt
 from tqdm import tqdm # 导入 tqdm
 
+# 添加 Matplotlib 中文显示配置
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体为黑体
+plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+
 from dynn.core.neurons import NeuronPopulation, IzhikevichNeuron
 from dynn.core.synapses import SynapseCollection
 from dynn.core.network import NeuralNetwork
@@ -353,6 +357,14 @@ def run_mountain_car_experiment(config_path=None):
     # 7. 配置数据探针
     probes_data = {} # To store data from probes if needed for saving later
 
+    # 初始化用于存储所有轮次数据的列表
+    all_episodes_input_spikes_data = []
+    all_episodes_output_spikes_data = []
+    all_episodes_weights_data = []
+    all_episodes_raw_rewards_data = []
+    all_episodes_smoothed_rewards_data = []
+    all_episodes_actions_data = []
+
     # 计算以仿真步数为单位的记录间隔
     record_interval_steps = 1 # 默认值为1，即每步都记录 (如果 record_interval_ms <= 0)
     if config.probes.record_interval_ms > 0:
@@ -395,9 +407,9 @@ def run_mountain_car_experiment(config_path=None):
 
         # Store data for custom logging
         # These lists will be populated by the custom logger
-        logged_raw_rewards = [] # List to store (time_ms, raw_reward)
-        logged_smoothed_rewards = [] # List to store (time_ms, smoothed_reward)
-        logged_actions = [] # List to store (time_ms, action)
+        logged_raw_rewards = [] # List to store (time_ms, raw_reward) for the CURRENT episode
+        logged_smoothed_rewards = [] # List to store (time_ms, smoothed_reward) for the CURRENT episode
+        logged_actions = [] # List to store (time_ms, action) for the CURRENT episode
         # Removed CustomDataProbe and its callback
 
     # 8. 创建仿真器
@@ -411,7 +423,9 @@ def run_mountain_car_experiment(config_path=None):
     print(f"开始 {num_episodes} 轮实验...")
     start_time = time.time()
 
-    for episode in tqdm(range(num_episodes), desc="运行轮次"): # 使用 tqdm 包装轮次循环
+    # 修改 tqdm 循环以允许更新 postfix
+    episode_iterator = tqdm(range(num_episodes), desc="运行轮次", unit="轮")
+    for episode in episode_iterator: 
         observation, info = env.reset()
         network.reset() # Correct method name to reset network, populations, and probes
         if hasattr(reward_smoother, 'reset'): reward_smoother.reset()
@@ -481,7 +495,7 @@ def run_mountain_car_experiment(config_path=None):
             action = output_decoder.decode(spike_map_for_decoder)
             
             # 调试: 打印动作的类型和值
-            print(f"解码得到的动作: {action} (类型: {type(action)})")
+            # print(f"解码得到的动作: {action} (类型: {type(action)})")
             if action is None:
                 print("错误: 解码器返回的动作为 None！检查解码器逻辑和默认动作设置。")
                 # 可以选择在这里设置一个默认动作，或者抛出错误以停止
@@ -519,39 +533,198 @@ def run_mountain_car_experiment(config_path=None):
                 break
         
         total_rewards_per_episode.append(episode_reward)
-        print(f"轮次 {episode + 1}/{num_episodes} 完成: 总奖励 = {episode_reward}, 步数 = {step + 1}")
+        # print(f"轮次 {episode + 1}/{num_episodes} 完成: 总奖励 = {episode_reward}, 步数 = {step + 1}")
+        episode_iterator.set_postfix(轮次=f"{episode + 1}/{num_episodes}", 总奖励=episode_reward, 步数=step + 1, refresh=True)
 
-        # (可选) 在每轮结束后保存或分析探针数据
+        # (可选) 在每轮结束后保存或分析探针数据 -> 修改为在每轮结束后收集数据
         if config.probes.record_interval_ms > 0 and config.probes.save_to_csv:
-            output_dir = config.probes.output_dir
-            os.makedirs(output_dir, exist_ok=True)
+            # output_dir = config.probes.output_dir # output_dir将在最后使用
+            # os.makedirs(output_dir, exist_ok=True) # 也移到最后
             
-            input_spike_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_input_spikes.csv"))
-            output_spike_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_output_spikes.csv"))
-            weights_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_weights.csv"))
-            
-            # Save custom logged data
-            header_reward = "network_time_ms,raw_reward"
-            header_action = "network_time_ms,action"
-            # Convert lists of tuples to numpy arrays for easier saving if desired, or write manually
-            
-            with open(os.path.join(output_dir, f"ep{episode+1}_raw_rewards.csv"), 'w') as f_reward:
-                f_reward.write(header_reward + '\n')
-                for entry in logged_raw_rewards:
-                    f_reward.write(f"{entry[0]},{entry[1]}\n")
-            
-            with open(os.path.join(output_dir, f"ep{episode+1}_smoothed_rewards.csv"), 'w') as f_s_reward:
-                f_s_reward.write("network_time_ms,smoothed_reward\n")
-                for entry in logged_smoothed_rewards:
-                    f_s_reward.write(f"{entry[0]},{entry[1]}\n")
+            # 收集探针数据
+            if 'input_spikes' in network.probes:
+                probe_obj = network.probes['input_spikes']
+                probe_full_data = probe_obj.get_data() # {'time': [...], 'data': {'fired': [...]}}
+                timestamps = probe_full_data.get('time', [])
+                fired_arrays_list = probe_full_data.get('data', {}).get('fired', [])
+                
+                processed_spike_data_for_ep = []
+                for t_idx, fired_array_at_t in enumerate(fired_arrays_list):
+                    if t_idx < len(timestamps): # 确保时间戳和数据对齐
+                        current_timestamp = timestamps[t_idx]
+                        if fired_array_at_t is not None: # 检查数据是否有效
+                            firing_neuron_indices = np.where(fired_array_at_t)[0]
+                            for neuron_id in firing_neuron_indices:
+                                processed_spike_data_for_ep.append((current_timestamp, neuron_id))
+                all_episodes_input_spikes_data.append({'episode': episode + 1, 'data': processed_spike_data_for_ep})
 
-            with open(os.path.join(output_dir, f"ep{episode+1}_actions.csv"), 'w') as f_action:
-                f_action.write(header_action + '\n')
-                for entry in logged_actions:
-                    f_action.write(f"{entry[0]},{entry[1]}\n")
-            print(f"探针数据已保存到 {output_dir} 目录 (轮次 {episode+1})")
+            if 'output_spikes' in network.probes:
+                probe_obj = network.probes['output_spikes']
+                probe_full_data = probe_obj.get_data()
+                timestamps = probe_full_data.get('time', [])
+                fired_arrays_list = probe_full_data.get('data', {}).get('fired', [])
+                
+                processed_spike_data_for_ep = []
+                for t_idx, fired_array_at_t in enumerate(fired_arrays_list):
+                    if t_idx < len(timestamps):
+                        current_timestamp = timestamps[t_idx]
+                        if fired_array_at_t is not None:
+                            firing_neuron_indices = np.where(fired_array_at_t)[0]
+                            for neuron_id in firing_neuron_indices:
+                                processed_spike_data_for_ep.append((current_timestamp, neuron_id))
+                all_episodes_output_spikes_data.append({'episode': episode + 1, 'data': processed_spike_data_for_ep})
+
+            if 'input_output_weights' in network.probes:
+                # SynapseProbe.get_data()返回 {'time': [...], 'data': {'weights': [(w_arr1_at_t1), (w_arr2_at_t2), ...]}}
+                # SynapseProbe 内部 self.data['weights'] 存储的是 (weights_array) 列表。
+                # 之前的逻辑是直接访问 self.data['weights']，但它的时间戳在哪里？
+                # SynapseProbe._collect_data appends syn_collection.get_weights().copy()，这里没有时间戳。
+                # BaseProbe.attempt_record appends current_time_ms to self.time_data.
+                # So, SynapseProbe.get_data() should correctly pair them.
+                
+                probe_obj = network.probes['input_output_weights']
+                probe_full_data = probe_obj.get_data() # {'time': [...], 'data': {'weights': [...]}}
+                timestamps = probe_full_data.get('time', [])
+                weights_arrays_list = probe_full_data.get('data', {}).get('weights', [])
+                
+                processed_weights_data_for_ep = []
+                for t_idx, weights_array_at_t in enumerate(weights_arrays_list):
+                    if t_idx < len(timestamps):
+                        current_timestamp = timestamps[t_idx]
+                        if weights_array_at_t is not None:
+                             processed_weights_data_for_ep.append((current_timestamp, weights_array_at_t))
+                all_episodes_weights_data.append({'episode': episode + 1, 'data': processed_weights_data_for_ep})
+            
+            # 收集自定义日志数据
+            all_episodes_raw_rewards_data.append({'episode': episode + 1, 'data': list(logged_raw_rewards)})
+            all_episodes_smoothed_rewards_data.append({'episode': episode + 1, 'data': list(logged_smoothed_rewards)})
+            all_episodes_actions_data.append({'episode': episode + 1, 'data': list(logged_actions)})
+            
+            # 注释掉原来的每轮次文件写入操作
+            # input_spike_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_input_spikes.csv"))
+            # output_spike_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_output_spikes.csv"))
+            # weights_probe.export_to_csv(os.path.join(output_dir, f"ep{episode+1}_weights.csv"))
+            
+            # header_reward = "network_time_ms,raw_reward"
+            # header_action = "network_time_ms,action"
+            
+            # with open(os.path.join(output_dir, f"ep{episode+1}_raw_rewards.csv"), 'w') as f_reward:
+            #     f_reward.write(header_reward + '\n')
+            #     for entry in logged_raw_rewards:
+            #         f_reward.write(f"{entry[0]},{entry[1]}\n")
+            
+            # with open(os.path.join(output_dir, f"ep{episode+1}_smoothed_rewards.csv"), 'w') as f_s_reward:
+            #     f_s_reward.write("network_time_ms,smoothed_reward\n")
+            #     for entry in logged_smoothed_rewards:
+            #         f_s_reward.write(f"{entry[0]},{entry[1]}\n")
+
+            # with open(os.path.join(output_dir, f"ep{episode+1}_actions.csv"), 'w') as f_action:
+            #     f_action.write(header_action + '\n')
+            #     for entry in logged_actions:
+            #         f_action.write(f"{entry[0]},{entry[1]}\n")
+            # # print(f"探针数据已保存到 {output_dir} 目录 (轮次 {episode+1})") # 注释掉此行
 
     end_time = time.time()
+    
+    # 诊断：在写入文件前打印收集到的数据信息
+    if config.probes.record_interval_ms > 0 and config.probes.save_to_csv:
+        print(f"诊断: all_episodes_weights_data 收集到的轮次数: {len(all_episodes_weights_data)}")
+        if all_episodes_weights_data:
+            print(f"诊断: 第一个轮次的权重数据条目数: {len(all_episodes_weights_data[0]['data'])}")
+            if all_episodes_weights_data[0]['data']:
+                print(f"诊断: 第一个轮次的第一条权重数据样本: {all_episodes_weights_data[0]['data'][0]}")
+        
+        print(f"诊断: all_episodes_raw_rewards_data 收集到的轮次数: {len(all_episodes_raw_rewards_data)}")
+        if all_episodes_raw_rewards_data:
+            print(f"诊断: 第一个轮次的原始奖励数据条目数: {len(all_episodes_raw_rewards_data[0]['data'])}")
+            if all_episodes_raw_rewards_data[0]['data']:
+                print(f"诊断: 第一个轮次的第一条原始奖励数据样本: {all_episodes_raw_rewards_data[0]['data'][0]}")
+
+    # 在实验总结前，执行所有数据文件的写入操作
+    if config.probes.record_interval_ms > 0 and config.probes.save_to_csv:
+        output_dir = config.probes.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"开始将所有轮次的探针和日志数据保存到 {output_dir} 目录...")
+
+        # 保存 Input Spikes 数据
+        for item in all_episodes_input_spikes_data:
+            ep_num = item['episode']
+            data_to_write = item['data']
+            filepath = os.path.join(output_dir, f"ep{ep_num}_input_spikes.csv")
+            with open(filepath, 'w') as f:
+                f.write("timestamp,neuron_id\n") # PopulationProbe (fired) header
+                for timestamp, neuron_id in data_to_write:
+                    f.write(f"{timestamp},{neuron_id}\n")
+
+        # 保存 Output Spikes 数据
+        for item in all_episodes_output_spikes_data:
+            ep_num = item['episode']
+            data_to_write = item['data']
+            filepath = os.path.join(output_dir, f"ep{ep_num}_output_spikes.csv")
+            with open(filepath, 'w') as f:
+                f.write("timestamp,neuron_id\n") # PopulationProbe (fired) header
+                for timestamp, neuron_id in data_to_write:
+                    f.write(f"{timestamp},{neuron_id}\n")
+
+        # 保存 Weights 数据
+        for item in all_episodes_weights_data:
+            ep_num = item['episode']
+            # data is list of (timestamp, weights_array)
+            data_to_write = item['data'] 
+            filepath = os.path.join(output_dir, f"ep{ep_num}_weights.csv")
+            with open(filepath, 'w') as f:
+                if data_to_write: # Ensure there's data to determine num_weights
+                    num_weights = data_to_write[0][1].size
+                    header = "timestamp," + ",".join([f"weight_{i}" for i in range(num_weights)])
+                    f.write(header + "\n")
+                    for timestamp, weights_array in data_to_write:
+                        weights_str = ",".join(map(str, weights_array))
+                        f.write(f"{timestamp},{weights_str}\n")
+                else:
+                    f.write("timestamp\n") # Empty file with header if no weights data for an episode
+
+        # 保存 Raw Rewards 数据
+        header_reward = "network_time_ms,raw_reward"
+        for item in all_episodes_raw_rewards_data:
+            ep_num = item['episode']
+            data_to_write = item['data'] # list of (time_ms, value)
+            filepath = os.path.join(output_dir, f"ep{ep_num}_raw_rewards.csv")
+            with open(filepath, 'w') as f:
+                f.write(header_reward + '\n')
+                for time_ms, value in data_to_write:
+                    f.write(f"{time_ms},{value}\n")
+        
+        # 保存 Smoothed Rewards 数据
+        header_smoothed_reward = "network_time_ms,smoothed_reward"
+        for item in all_episodes_smoothed_rewards_data:
+            ep_num = item['episode']
+            data_to_write = item['data']
+            filepath = os.path.join(output_dir, f"ep{ep_num}_smoothed_rewards.csv")
+            with open(filepath, 'w') as f:
+                f.write(header_smoothed_reward + '\n')
+                for time_ms, value in data_to_write:
+                    f.write(f"{time_ms},{value}\n")
+
+        # 保存 Actions 数据
+        header_action = "network_time_ms,action"
+        for item in all_episodes_actions_data:
+            ep_num = item['episode']
+            data_to_write = item['data']
+            filepath = os.path.join(output_dir, f"ep{ep_num}_actions.csv")
+            with open(filepath, 'w') as f:
+                f.write(header_action + '\n')
+                for time_ms, value in data_to_write:
+                    f.write(f"{time_ms},{value}\n")
+        
+        print(f"所有轮次的探针和日志数据已保存到 {output_dir} 目录。")
+
+
+    # 在实验总结前，添加一条关于探针数据保存的总提示 -> 已被上面的详细保存过程替代和覆盖
+    # if config.probes.record_interval_ms > 0 and config.probes.save_to_csv:
+    #     output_dir_summary = config.probes.output_dir # 获取一次目录，避免重复访问
+    #     print(f"所有轮次的探针数据已保存到 {output_dir_summary} 目录。")
+
+
     print(f"实验完成，总耗时: {end_time - start_time:.2f} 秒")
     print(f"每轮平均奖励: {np.mean(total_rewards_per_episode)}")
 
