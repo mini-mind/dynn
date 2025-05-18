@@ -285,4 +285,64 @@ class RewardModulatedSTDP(STDP):
     def __repr__(self):
         return (f"RewardModulatedSTDP(lr_ltp={self.lr_ltp}, lr_ltd={self.lr_ltd}, "
                 f"tau_pre={self.tau_pre}, tau_post={self.tau_post}, "
-                f"reward_tau={self.reward_tau}, strength={self.learning_rate_modulation_strength})") 
+                f"reward_tau={self.reward_tau}, strength={self.learning_rate_modulation_strength})")
+
+class VoltageTripletSTDP(BaseLearningRule):
+    """
+    电压三元组STDP (Voltage-Triplet STDP) 规则的占位符。
+    具体实现参考 Pfister & Gerstner (2006)。
+    """
+    def __init__(self, lr_ltp=0.001, lr_ltd=0.001, 
+                 tau_plus=20.0, tau_minus=20.0, 
+                 tau_x=15.0, tau_y=15.0, 
+                 # 根据API文档，A_plus 和 A_minus 可能对应 lr_ltp 和 lr_ltd
+                 # 但通常三元组模型有其自身的幅度参数。
+                 # 为简化，暂时使用基类的lr_ltp, lr_ltd。
+                 **kwargs): # 接受其他参数以备将来使用
+        """
+        初始化电压三元组STDP学习规则。
+
+        参数:
+            lr_ltp (float): LTP的基础学习率 (可能对应 A_plus)。
+            lr_ltd (float): LTD的基础学习率 (可能对应 A_minus)。
+            tau_plus (float): 突触前脉冲迹的时间常数 (ms)。
+            tau_minus (float): 突触后脉冲迹的时间常数 (ms)。
+            tau_x (float): 突触前电压迹的时间常数 (ms)。
+            tau_y (float): 突触后电压迹的时间常数 (ms)。
+        """
+        super().__init__(lr_ltp, lr_ltd)
+        self.tau_plus = tau_plus
+        self.tau_minus = tau_minus
+        self.tau_x = tau_x
+        self.tau_y = tau_y
+        # 其他三元组模型特定的迹变量可以在这里初始化，或者在群体中管理
+        # 例如: r1_pre, r2_pre, r1_post, o1_post, o2_post
+
+        # 打印警告，说明这是占位符
+        print("警告: VoltageTripletSTDP 当前是一个占位符实现，尚未完全功能化。")
+
+    def update_weights(self, synapse_collection, pre_spikes, post_spikes, dt, current_time):
+        """
+        更新突触权重。
+        注意: 这是占位符实现。
+        """
+        # 需要访问突触前和突触后的电压，这超出了当前 pre_spikes/post_spikes 的范围
+        # NeuronPopulation 需要提供一种获取电压的方式，或者电压迹由学习规则自身维护（基于脉冲和时间）。
+        # Pfister & Gerstner (2006) 的模型依赖于：
+        # - 突触前脉冲迹 (r_pre, 通常是低通滤波的 pre_spikes)
+        # - 突触后脉冲迹 (r_post, 通常是低通滤波的 post_spikes)
+        # - 突触后电压的低通滤波 (u_bar, 作为 r_post 的替代或补充)
+        # - 权重变化依赖于这些迹和当前脉冲事件
+
+        # dw = pre_trace * (A_LTD + A_triplet * post_trace_slow) if post_spike
+        # dw = post_trace * (A_LTP) if pre_spike
+        # (以上是非常简化的示意，具体公式复杂)
+        
+        # 由于这是占位符，我们不改变权重
+        # print(f"VoltageTripletSTDP.update_weights called at {current_time}, but it's a placeholder.")
+        pass # 不执行任何操作
+
+    def __repr__(self):
+        return (f"VoltageTripletSTDP(lr_ltp={self.lr_ltp}, lr_ltd={self.lr_ltd}, "
+                f"tau_plus={self.tau_plus}, tau_minus={self.tau_minus}, "
+                f"tau_x={self.tau_x}, tau_y={self.tau_y})") 

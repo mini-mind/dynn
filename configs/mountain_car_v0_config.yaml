@@ -1,0 +1,91 @@
+experiment:
+  name: "mountain_car_v0_custom_test" # 更改了实验名称
+
+simulation:
+  dt: 1.0
+  num_episodes: 10 # 设置为 10 轮用于快速测试
+  max_steps_per_episode: 200
+  snn_run_duration_ms_per_env_step: 20
+  random_seed: 42 # 添加随机种子以便结果可复现
+
+# 将 'snn' 重命名为 'network' 以匹配 ExperimentSession 的期望
+network:
+  input_neurons_count: 64
+  output_neurons_count: 10 # 确保是偶数以适配 BidirectionalThresholdDecoder
+  populations:
+    - name: "InputPopulation"
+      model_type: "IzhikevichNeuron"
+      # num_neurons: 64 # 会被 snn.input_neurons_count 覆盖, 可以省略
+      params: { a: 0.02, b: 0.2, c: -65.0, d: 8.0 }
+      initial_conditions:
+        v: { dist: "uniform", low: -70.0, high: -60.0 }
+        u: { dist: "scalar", value: -14.0 }
+    - name: "OutputPopulation"
+      model_type: "IzhikevichNeuron"
+      # num_neurons: 10 # 会被 snn.output_neurons_count 覆盖, 可以省略
+      params: { a: 0.02, b: 0.2, c: -65.0, d: 2.0 } # d 参数通常较小
+      initial_conditions:
+        v: { dist: "uniform", low: -70.0, high: -60.0 }
+        u: { dist: "scalar", value: -14.0 }
+  synapses:
+    - name: "InputToOutputConnections"
+      pre_population_name: "InputPopulation"
+      post_population_name: "OutputPopulation"
+      connectivity_type: "full"
+      initial_weights:
+        strategy: "normal"
+        mean: 0.5
+        std: 0.1
+      # weight_limits: # 脚本警告此功能尚不支持
+      #   min: 0.0
+      #   max: 1.0
+
+# learning_rules 也属于网络配置的一部分
+learning_rules:
+  stdp:
+    tau_plus: 20.0
+    tau_minus: 20.0
+    a_plus: 0.01
+    a_minus: -0.01       # 通常为负值
+    dependency_type: "multiplicative"
+  reward_modulation:
+    reward_tau: 100.0     # 奖励信号平滑的时间常数
+    strength: 0.1         # 奖励对学习率的调制强度
+
+# 创建 'io' 部分，并将相关配置移入
+io:
+  input_encoder:
+    type: "GaussianEncoder"
+    gaussian_sigma_scale: 0.15
+    gaussian_amplitude: 20.0
+    # ExperimentSession.setup 会查找 target_population_name
+    # 我们假设编码器应用于 'InputPopulation'
+    target_population_name: "InputPopulation"
+
+  output_decoder:
+    type: "BidirectionalThresholdDecoder"
+    action_threshold: 0       # 脉冲数差大于此值即行动作 (0表示多数即触发)
+    default_action: 1         # 不动 (对应 MountainCar 动作 1)
+    action_left: 0            # 向左 (对应 MountainCar 动作 0)
+    action_right: 2           # 向右 (对应 MountainCar 动作 2)
+    # ExperimentSession.setup 会查找 source_population_name
+    # 我们假设解码器来自 'OutputPopulation'
+    source_population_name: "OutputPopulation"
+
+  reward_processor:
+    type: "SlidingWindowSmoother"
+    smoothing_window_size: 10 # 对塑形后的奖励进行平滑
+
+  reward_shaping: # Reward shaping 与奖励处理相关，也放入 io
+    enabled: true
+    position_weight: 0.5    # 位置 (作为高度代理) 的权重
+    velocity_weight: 0.1    # 向右速度的权重
+
+  probes: # probes 也和 IO/数据记录相关
+    record_interval_ms: 20    # SNN 仿真时间毫秒
+    save_to_csv: true
+    output_dir: "results/mountain_car_v0_custom_test/" # 更改输出目录
+    record_neuron_voltage: true # 记录神经元电压和恢复变量
+
+environment:
+  name: "MountainCar-v0" 

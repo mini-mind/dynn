@@ -100,6 +100,80 @@ class IzhikevichNeuron:
         self.fired = False
         self.last_spike_time = -np.inf
 
+class LIFNeuron:
+    """
+    实现一个 Leaky Integrate-and-Fire (LIF) 脉冲神经元模型。
+    """
+    def __init__(self, tau_m=20.0, v_rest=-65.0, v_reset=-65.0, v_thresh=-50.0, 
+                 refractory_period=2.0, initial_v=-70.0):
+        """
+        初始化LIF神经元。
+
+        参数:
+            tau_m (float): 膜时间常数 (ms)。
+            v_rest (float): 静息膜电位 (mV)。
+            v_reset (float): 脉冲后膜电位的重置值 (mV)。
+            v_thresh (float): 脉冲发放阈值 (mV)。
+            refractory_period (float): 不应期 (ms)。
+            initial_v (float): 初始膜电位 (mV)。
+        """
+        self.tau_m = tau_m
+        self.v_rest = v_rest
+        self.v_reset = v_reset
+        self.v_thresh = v_thresh
+        self.refractory_period = refractory_period
+
+        self.v = float(initial_v)
+        self.fired = False
+        self.last_spike_time = -np.inf
+        self.refractory_timer = 0.0 # 当前不应期剩余时间
+
+    def update(self, I_inj, dt):
+        """
+        根据注入电流和时间步长更新神经元状态。
+
+        参数:
+            I_inj (float): 注入神经元的电流 (假设单位与R_m匹配, 通常 R_m*I)。
+            dt (float): 仿真时间步长 (ms)。
+        """
+        self.fired = False
+
+        if self.refractory_timer > 0:
+            self.refractory_timer -= dt
+            return self.fired
+
+        # dv/dt = (v_rest - v + R_m * I_inj) / tau_m
+        # 这里假设 I_inj 已经是 R_m * I (即单位为 mV)
+        dv = (self.v_rest - self.v + I_inj) / self.tau_m
+        self.v += dv * dt
+
+        if self.v >= self.v_thresh:
+            self.v = self.v_reset
+            self.fired = True
+            self.refractory_timer = self.refractory_period
+            # self.last_spike_time will be updated by NeuronPopulation or simulator
+        
+        return self.fired
+
+    def get_state(self):
+        """
+        返回神经元的关键内部状态变量。
+        """
+        return {
+            "v": self.v,
+            "fired": self.fired,
+            "last_spike_time": self.last_spike_time,
+            "refractory_timer": self.refractory_timer
+        }
+
+    def reset(self, initial_v=-70.0):
+        """
+        重置神经元状态到初始值。
+        """
+        self.v = initial_v
+        self.fired = False
+        self.last_spike_time = -np.inf
+        self.refractory_timer = 0.0
 
 class NeuronPopulation:
     """

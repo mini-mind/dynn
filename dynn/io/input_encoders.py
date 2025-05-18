@@ -182,40 +182,40 @@ class DirectCurrentInjector(BaseInputEncoder):
 
 # 针对 "MountainCar-v0" 环境，仅使用小车的位置信息。
 # 环境观察: [position, velocity]
-class MountainCarPositionEncoder(GaussianEncoder):
-    """
-    针对 MountainCar-v0 环境的输入编码器，仅使用小车的位置信息。
-    继承自 GaussianEncoder。
-    """
-    def __init__(self, target_pop_name, num_neurons, 
-                 pos_min=-1.2, pos_max=0.6, # MountainCar-v0 位置范围
-                 sigma_scale=0.1, current_amplitude=10.0, 
-                 **kwargs):
-        """
-        参数:
-            pos_min (float): 小车位置的最小值。
-            pos_max (float): 小车位置的最大值。
-            其他参数同 GaussianEncoder。
-        """
-        super().__init__(target_pop_name, num_neurons, 
-                         min_val=pos_min, max_val=pos_max, 
-                         sigma_scale=sigma_scale, current_amplitude=current_amplitude, 
-                         **kwargs)
-    
-    def encode(self, observation, dt=None, current_time=None):
-        """
-        编码 MountainCar 的观察。
-
-        参数:
-            observation (list or np.array): 环境的观察值 [position, velocity]。
-        """
-        if not hasattr(observation, '__len__') or len(observation) < 1:
-            raise ValueError(f"MountainCarPositionEncoder 期望至少包含位置信息的观察，但接收到: {observation}")
-        
-        position = observation[0] # README 要求: "仅使用小车的位置信息 (忽略速度信息)"
-        return super().encode(position, dt, current_time) # 调用父类的encode方法
-
-    def __repr__(self):
-        return (f"MountainCarPositionEncoder(target='{self.target_pop_name}', num_neurons={self.num_neurons}, "
-                f"pos_range=[{self.min_val:.2f}, {self.max_val:.2f}], sigma_scale={self.sigma/self.val_range if self.val_range else 0:.2f}, "
-                f"amplitude={self.current_amplitude:.2f})") 
+# class MountainCarPositionEncoder(GaussianEncoder):
+#     """
+#     针对 MountainCar-v0 环境的输入编码器，仅使用小车的位置信息。
+#     继承自 GaussianEncoder。
+#     """
+#     def __init__(self, target_pop_name, num_neurons, 
+#                  pos_min=-1.2, pos_max=0.6, # MountainCar-v0 位置范围
+#                  sigma_scale=0.1, current_amplitude=10.0, 
+#                  **kwargs):
+#         """
+#         参数:
+#             pos_min (float): 小车位置的最小值。
+#             pos_max (float): 小车位置的最大值。
+#             其他参数同 GaussianEncoder。
+#         """
+#         super().__init__(target_pop_name, num_neurons, 
+#                          min_val=pos_min, max_val=pos_max, 
+#                          sigma_scale=sigma_scale, current_amplitude=current_amplitude, 
+#                          **kwargs)
+#     
+#     def encode(self, observation, dt=None, current_time=None):
+#         """
+#         编码 MountainCar 的观察。
+# 
+#         参数:
+#             observation (list or np.array): 环境的观察值 [position, velocity]。
+#         """
+#         if not hasattr(observation, '__len__') or len(observation) < 1:
+#             raise ValueError(f"MountainCarPositionEncoder 期望至少包含位置信息的观察，但接收到: {observation}")
+#         
+#         position = observation[0] # README 要求: "仅使用小车的位置信息 (忽略速度信息)"
+#         return super().encode(position, dt, current_time) # 调用父类的encode方法
+# 
+#     def __repr__(self):
+#         return (f"MountainCarPositionEncoder(target='{self.target_pop_name}', num_neurons={self.num_neurons}, "
+#                 f"pos_range=[{self.min_val:.2f}, {self.max_val:.2f}], sigma_scale={self.sigma/self.val_range if self.val_range else 0:.2f}, "
+#                 f"amplitude={self.current_amplitude:.2f})") 
